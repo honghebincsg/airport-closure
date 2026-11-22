@@ -145,6 +145,8 @@ BND = r"(?:(TWY|RWY|TERMINAL|RAMP|APRON)\s*)?([A-Z0-9]+(?:\s*RAMP)?|[0-9]{2}[A-Z
 PAIR = re.compile(rf"^{BND}\s+AND\s+{BND}$")
 
 def clean(t):
+    t = re.sub(r"\S*RSTRCTN>.*$", "", t)          # FAA 常把 "M2RSTRCTN>0?" 直接粘在 CLSD 后面
+    t = re.sub(r"(CLSD|CLOSED)(?=[A-Z])", r"\1 ", t)
     t = re.sub(r"[A-Z]*RSTRCTN>\S*(?:\s+\S+)*?$", "", t)
     t = re.sub(r">\S*(?:\s+\S+)*?$", "", t)
     # 去掉尾部的时间段（粘贴/报文里常见 11/19/2026 1215 11/19/2026 2300）
@@ -173,7 +175,7 @@ def parse_closures(rows, log=print):
             between = None
             mb = re.search(r"BTN\s+(.+)$", rest, re.I)
             if mb:
-                between = mb.group(1).strip(" .,")
+                between = re.split(r"\bCLSD|\bCLOSED", mb.group(1))[0].strip(" .,")
             if not has_clsd and not any(re.search(r"CLSD|CLOSED", x, re.I) for x in frags[i + 1:]):
                 continue
             rec = dict(no=r["no"], kind=kind, name=name, b1=None, b2=None,
@@ -878,8 +880,8 @@ def render(icao, objs, segments, unmatched, runways, nodes, edges, xy, out_png, 
             if rw["a"][0] in c["name"].split("/") and rw["b"][0] in c["name"].split("/"):
                 poly, p1, p2 = rw_poly(rw)
                 ax.add_patch(Polygon(poly, closed=True, facecolor="#e63946", edgecolor="#c1212e",
-                                     lw=2.0, alpha=0.28, hatch="////", zorder=5))
-                ax.add_patch(Polygon(poly, closed=True, facecolor="none", edgecolor="#c1212e", lw=2.2, zorder=5))
+                                     lw=1.4, alpha=0.20, hatch="////", zorder=5))
+                ax.add_patch(Polygon(poly, closed=True, facecolor="none", edgecolor="#c1212e", lw=1.5, zorder=5))
                 q = ((p1[0] + p2[0]) / 2, (p1[1] + p2[1]) / 2)
                 rx_, ry_ = -(p2[1] - p1[1]), (p2[0] - p1[0])          # 跑道法向，用于往旁边贴字
                 RL = math.hypot(rx_, ry_) or 1
@@ -1047,8 +1049,8 @@ def render(icao, objs, segments, unmatched, runways, nodes, edges, xy, out_png, 
             badge(cx + vx * 205, cy + vy * 205, cnt, fc="#dd5158", lc="#dd5158", src=src_poly)
             continue
         xs = [p[0] for p in s["pts"]]; ys = [p[1] for p in s["pts"]]
-        ax.plot(xs, ys, color="white", lw=SEG_LW + 1.8, solid_capstyle="round", zorder=11.55)
-        ax.plot(xs, ys, color="#e63946", lw=SEG_LW, solid_capstyle="round", zorder=11.8)
+        ax.plot(xs, ys, color="white", lw=SEG_LW + 1.8, solid_capstyle="round", zorder=11.25)
+        ax.plot(xs, ys, color="#e63946", lw=SEG_LW, solid_capstyle="round", zorder=11.42)
         cnt += 1
         numbered.append((cnt, s["label"], s["no"], s["start"], s["end"], s.get("raw", "")))
         ax_, ay_ = xs[len(xs) // 2], ys[len(ys) // 2]
@@ -1135,15 +1137,15 @@ def render(icao, objs, segments, unmatched, runways, nodes, edges, xy, out_png, 
         reserve(spot[0], spot[1], rr)
         if kind == "bnd":                      # 边界要素（AM 面片上的分支道）用淡红小斜体
             ax.text(spot[0], spot[1], nm, fontsize=LBL_FS*0.86, color="#b0525b", style="italic",
-                    ha="center", va="center", zorder=11,
+                    ha="center", va="center", zorder=11.6,
                     path_effects=[pe.withStroke(linewidth=2.2, foreground="#f7f8fa")])
         elif kind == "am":                     # AM 面片落段（淡红编号对应的那道）
             ax.text(spot[0], spot[1], nm, fontsize=LBL_FS*0.9, color="#b0525b",
-                    ha="center", va="center", zorder=11,
+                    ha="center", va="center", zorder=11.6,
                     path_effects=[pe.withStroke(linewidth=2.2, foreground="#f7f8fa")])
         else:
             ax.text(spot[0], spot[1], nm, fontsize=LBL_FS if len(nm) <= 2 else LBL_FS*0.9, color="#3f4a56",
-                    ha="center", va="center", zorder=11,
+                    ha="center", va="center", zorder=11.6,
                     path_effects=[pe.withStroke(linewidth=2.4, foreground="#f7f8fa")])
         n_lbl += 1
         _ = n_lbl
