@@ -817,11 +817,11 @@ def render(icao, objs, segments, unmatched, runways, nodes, edges, xy, out_png, 
             dx_, dy_ = best[0] - anc[0], best[1] - anc[1]
             dd_ = d_line or 1
             ax.plot([anc[0], best[0] - dx_ / dd_ * 74], [anc[1], best[1] - dy_ / dd_ * 74],
-                    color="#e63946", lw=1.1, alpha=0.95, zorder=8.6,
+                    color="#e63946", lw=1.1, alpha=0.95, zorder=11.9,
                     solid_capstyle="round")        # 8.6：在关闭段(8)之上、编号圈(9)之下，
                                             # 这样关闭段的粗红线不会把这根细线吃掉
             ax.add_patch(Circle(anc, 3.4, facecolor="#e63946", edgecolor="#ffffff",
-                                lw=0.7, zorder=8.65))   # 起点小圆点：一眼看出从哪段引出来的
+                                lw=0.7, zorder=11.92))   # 起点小圆点：一眼看出从哪段引出来的
             LEAD[0] += 1
         else:
             LEAD[1] += 1
@@ -872,7 +872,7 @@ def render(icao, objs, segments, unmatched, runways, nodes, edges, xy, out_png, 
     B_FS = 8.2
     # 字母标签字号随比例尺走：机场越大（每像素覆盖米数越多）字号越小
     LBL_FS = 6.6 if MPX < 4.6 else (5.8 if MPX < 6.4 else 4.3)
-    SEG_LW = 5.4 if MPX < 4.2 else (4.2 if MPX < 5.6 else 3.4)
+    SEG_LW = 3.6 if MPX < 4.2 else (3.0 if MPX < 5.6 else 2.3)
     for c in [o for o in objs if o["kind"] == "RWY"]:
         for rw in runways:
             if rw["a"][0] in c["name"].split("/") and rw["b"][0] in c["name"].split("/"):
@@ -1047,7 +1047,7 @@ def render(icao, objs, segments, unmatched, runways, nodes, edges, xy, out_png, 
             badge(cx + vx * 205, cy + vy * 205, cnt, fc="#dd5158", lc="#dd5158", src=src_poly)
             continue
         xs = [p[0] for p in s["pts"]]; ys = [p[1] for p in s["pts"]]
-        ax.plot(xs, ys, color="white", lw=SEG_LW + 2.4, solid_capstyle="round", zorder=11.55)
+        ax.plot(xs, ys, color="white", lw=SEG_LW + 1.8, solid_capstyle="round", zorder=11.55)
         ax.plot(xs, ys, color="#e63946", lw=SEG_LW, solid_capstyle="round", zorder=11.8)
         cnt += 1
         numbered.append((cnt, s["label"], s["no"], s["start"], s["end"], s.get("raw", "")))
