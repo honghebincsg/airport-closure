@@ -754,6 +754,8 @@ def render(icao, objs, segments, unmatched, runways, nodes, edges, xy, out_png, 
         for q_ in _densify([pa_, pb_], 60):
             RWY_SOLID.append((q_[0], q_[1], hw_))
 
+    RWY_SIDE = {}          # 每条跑道选定的标注侧（+1/-1），保证同跑道所有时段标签同侧
+
     def rwy_clash(x, y, r):
         return any(math.hypot(x - p[0], y - p[1]) < (r + p[2] + 18) for p in RWY_SOLID)
 
@@ -772,23 +774,33 @@ def render(icao, objs, segments, unmatched, runways, nodes, edges, xy, out_png, 
                 # 编号保持原来的圆圈样式，贴在时间框左侧、与之同一水平线；
                 # 框用左对齐，锚点 spot_t 就是框左边缘，圆放在锚点左侧固定距离。
                 label_y = (span_txt + "\n" if span_txt else "") + f"{c['name']} CLSD"
-                d0 = rw["width_m"] / 2 + 345
-                # 沿跑道轴向试多个位置（含跑道两端再往外伸）× 3 档外移 × 两侧，
-                # 取第一个不冲突的（就近优先）。窄间距机场靠"端外"位置找空地。
+                d0 = rw["width_m"] / 2 + 760
+                # 同一机场的跑道关闭标签统一往"图左"那侧摆：sgn 先从让 x 变小的一侧开始，
+                # 否则同一条跑道的两条时段通告会被左右分置到相邻跑道两侧，容易误读成别的跑道。
+                sg_first = -1 if rx_ > 0 else 1
+                key_rw = f"{rw['a'][0]}/{rw['b'][0]}"
+                side = RWY_SIDE.setdefault(key_rw, sg_first)   # 同一跑道固定同一侧，先到先定
                 cands = []
-                for t_ in (0.5, 0.34, 0.66, 0.20, 0.80, 1.14, -0.14, 1.32, -0.32):
-                    cx_ = p1[0] + (p2[0] - p1[0]) * t_
-                    cy_ = p1[1] + (p2[1] - p1[1]) * t_
+                # 顺序是"先近后远、先错开再推远"：先在同侧 1 倍偏移上沿轴向找空位，
+                # 实在排不开才把偏移加到 1.6/2.4 倍。否则同跑道两个时段会叠在同一高度，
+                # 两根引线指到跑道上同一个点，看着像标错了跑道。
+                for sgn in (side, -side):                      # 先用本跑道已定的那侧，全失败才换边
                     for mul in (1.0, 1.6, 2.4):
-                        for sgn in (1, -1):
+                        for t_ in (0.5, 0.4, 0.6, 0.32, 0.68, 0.24, 0.76, 0.16, 0.84,
+                                   1.1, -0.1, 1.25, -0.25):
+                            cx_ = p1[0] + (p2[0] - p1[0]) * t_
+                            cy_ = p1[1] + (p2[1] - p1[1]) * t_
                             cands.append((cx_ + rx_ / RL * d0 * mul * sgn,
                                           cy_ + ry_ / RL * d0 * mul * sgn))
                 spot_t = None
                 for c_ in cands:
-                    if (not clash(c_[0] + 240, c_[1], 245)
-                            and not seg_clash(c_[0] + 240, c_[1], 195)
-                            and not clash(c_[0] - 142, c_[1], 122)
-                            and not rwy_clash(c_[0] + 240, c_[1], 245)):
+                    ok1 = not clash(c_[0] + 240, c_[1], 245)
+                    ok2 = not seg_clash(c_[0] + 240, c_[1], 195)
+                    ok3 = not clash(c_[0] - 142, c_[1], 122)
+                    ok4 = not rwy_clash(c_[0] + 240, c_[1], 245)
+                    if os.environ.get("CHART_DBG3"):
+                        print(f"   cand {round(c_[0])},{round(c_[1])} box:{ok1} seg:{ok2} badge:{ok3} rwy:{ok4}", flush=True)
+                    if ok1 and ok2 and ok3 and ok4:
                         spot_t = c_; break
                 if spot_t is None:
                     spot_t = cands[0]
@@ -797,7 +809,32 @@ def render(icao, objs, segments, unmatched, runways, nodes, edges, xy, out_png, 
                         linespacing=1.45, zorder=12,     # 必须压在关闭红线之上，否则红线会穿过文字
                         bbox=dict(boxstyle="round,pad=0.42", fc="#ffffff", ec="#b3202c",
                                   lw=1.1, alpha=0.97))
-                bx_, by_ = spot_t[0] - 142, spot_t[1]
+                # 编号要放在"框与跑道之间"那一侧：这样引线不用横穿标签文字。
+                # 先求出跑道中心线上离框最近的点 q，再按 q 在框的左/右决定编号落哪边。
+                vx_, vy_ = p2[0] - p1[0], p2[1] - p1[1]
+                LL_ = math.hypot(vx_, vy_) or 1
+                ref_x = spot_t[0] + 240
+                tt_ = max(0.0, min(1.0, ((ref_x - p1[0]) * vx_ + (spot_t[1] - p1[1]) * vy_) / (LL_ * LL_)))
+                qx_, qy_ = p1[0] + vx_ * tt_, p1[1] + vy_ * tt_
+                if qx_ >= ref_x:                      # 跑道在框右边 → 编号贴在框右侧
+                    bx_, by_ = spot_t[0] + 480 + 150, spot_t[1]
+                else:                                 # 跑道在框左边 → 编号贴在框左侧
+                    bx_, by_ = spot_t[0] - 142, spot_t[1]
+                # 编号到跑道之间拉一根引线：起点取跑道中心线上离编号最近的点，
+                # 再沿法向挪到跑道边缘（半宽 + 10 m），末端收到圆边。
+                bx2_, by2_ = bx_, by_                 # 仅用于投影，避免覆盖上面的 q
+                tt2_ = max(0.0, min(1.0, ((bx2_ - p1[0]) * vx_ + (by2_ - p1[1]) * vy_) / (LL_ * LL_)))
+                qx_, qy_ = p1[0] + vx_ * tt2_, p1[1] + vy_ * tt2_
+                dvx_, dvy_ = bx_ - qx_, by_ - qy_
+                dq_ = math.hypot(dvx_, dvy_) or 1
+                sx_ = qx_ + dvx_ / dq_ * (rw["width_m"] / 2 + 10)
+                sy_ = qy_ + dvy_ / dq_ * (rw["width_m"] / 2 + 10)
+                if math.hypot(bx_ - sx_, by_ - sy_) - 74 > 16:
+                    ax.plot([sx_, bx_ - dvx_ / dq_ * 74], [sy_, by_ - dvy_ / dq_ * 74],
+                            color="#e63946", lw=1.1, alpha=0.95, zorder=12.4,
+                            solid_capstyle="round")
+                    ax.add_patch(Circle((sx_, sy_), 3.4, facecolor="#e63946",
+                                        edgecolor="#ffffff", lw=0.7, zorder=12.45))
                 ax.add_patch(Circle((bx_, by_), 72, facecolor="#b3202c", edgecolor="white",
                                     lw=2.0, zorder=12))
                 ax.text(bx_, by_, str(cnt), color="white", fontsize=11, fontweight="bold",
