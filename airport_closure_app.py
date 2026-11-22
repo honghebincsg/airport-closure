@@ -1047,8 +1047,8 @@ def render(icao, objs, segments, unmatched, runways, nodes, edges, xy, out_png, 
             badge(cx + vx * 205, cy + vy * 205, cnt, fc="#dd5158", lc="#dd5158", src=src_poly)
             continue
         xs = [p[0] for p in s["pts"]]; ys = [p[1] for p in s["pts"]]
-        ax.plot(xs, ys, color="white", lw=9.5, solid_capstyle="round", zorder=7)
-        ax.plot(xs, ys, color="#e63946", lw=SEG_LW, solid_capstyle="round", zorder=8)
+        ax.plot(xs, ys, color="white", lw=SEG_LW + 2.4, solid_capstyle="round", zorder=11.55)
+        ax.plot(xs, ys, color="#e63946", lw=SEG_LW, solid_capstyle="round", zorder=11.8)
         cnt += 1
         numbered.append((cnt, s["label"], s["no"], s["start"], s["end"], s.get("raw", "")))
         ax_, ay_ = xs[len(xs) // 2], ys[len(ys) // 2]
