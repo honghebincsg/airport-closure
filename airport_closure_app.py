@@ -745,6 +745,18 @@ def render(icao, objs, segments, unmatched, runways, nodes, edges, xy, out_png, 
         BADGES.append([int(idx), round(best[0]), round(best[1]), fc])
 
     numbered, cnt = [], 0
+    # 跑道关闭标签不许压在任何一条跑道面上（KSEA 那种窄间距机场，标签会被相邻跑道吃掉）
+    # 把每条跑道的中心线按 60 m 采样成点，带各自半宽，供标签判定用
+    RWY_SOLID = []
+    for rw_ in runways:
+        _p, pa_, pb_ = rw_poly(rw_)
+        hw_ = rw_["width_m"] / 2
+        for q_ in _densify([pa_, pb_], 60):
+            RWY_SOLID.append((q_[0], q_[1], hw_))
+
+    def rwy_clash(x, y, r):
+        return any(math.hypot(x - p[0], y - p[1]) < (r + p[2] + 18) for p in RWY_SOLID)
+
     for c in [o for o in objs if o["kind"] == "RWY"]:
         for rw in runways:
             if rw["a"][0] in c["name"].split("/") and rw["b"][0] in c["name"].split("/"):
@@ -761,9 +773,10 @@ def render(icao, objs, segments, unmatched, runways, nodes, edges, xy, out_png, 
                 # 框用左对齐，锚点 spot_t 就是框左边缘，圆放在锚点左侧固定距离。
                 label_y = (span_txt + "\n" if span_txt else "") + f"{c['name']} CLSD"
                 d0 = rw["width_m"] / 2 + 345
-                # 沿跑道轴向试 5 个位置 × 3 档外移 × 两侧，取第一个不冲突的（就近优先）
+                # 沿跑道轴向试多个位置（含跑道两端再往外伸）× 3 档外移 × 两侧，
+                # 取第一个不冲突的（就近优先）。窄间距机场靠"端外"位置找空地。
                 cands = []
-                for t_ in (0.5, 0.34, 0.66, 0.20, 0.80):
+                for t_ in (0.5, 0.34, 0.66, 0.20, 0.80, 1.14, -0.14, 1.32, -0.32):
                     cx_ = p1[0] + (p2[0] - p1[0]) * t_
                     cy_ = p1[1] + (p2[1] - p1[1]) * t_
                     for mul in (1.0, 1.6, 2.4):
@@ -774,7 +787,8 @@ def render(icao, objs, segments, unmatched, runways, nodes, edges, xy, out_png, 
                 for c_ in cands:
                     if (not clash(c_[0] + 240, c_[1], 245)
                             and not seg_clash(c_[0] + 240, c_[1], 195)
-                            and not clash(c_[0] - 142, c_[1], 122)):
+                            and not clash(c_[0] - 142, c_[1], 122)
+                            and not rwy_clash(c_[0] + 240, c_[1], 245)):
                         spot_t = c_; break
                 if spot_t is None:
                     spot_t = cands[0]
