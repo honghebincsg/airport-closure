@@ -100,22 +100,44 @@ def fetch_notams(icao, proxy=None, log=print):
     return rows
 
 def parse_pasted(text):
-    """把粘贴的通告文本切成条目：形如 '11/292 ... ' 每段一条"""
-    blocks = re.split(r"\n(?=\d{2}/\d{3}\b)", text.strip())
+    """把粘贴的通告文本切成条目。支持两类编号：
+       FAA 式 11/292；ICAO/AFTN 式 ZGGG C5531/26（时间 YYYYMMDDHHMM）。
+       国内 PIB 里并列的 "TWY GT1 AND TWY GT2 CLSD" 先拆成两条，否则整句匹配不上。"""
+    # 并列多条（"TWY GT1 AND TWY GT2 CLSD"）才拆；"BTN TWY T12 AND TWY T13" 是边界对，不能拆
+    text = re.sub(r"\s+AND\s+(TWY\s+[A-Z0-9/]+\s+CLSD)", r", \1", text, flags=re.I)
+    blocks = re.split(r"\n(?=(?:[A-Z]{4}\s+)?[A-Z]\d{4}/\d{2}\b|\d{2}/\d{3}\b)", text.strip())
     out = []
     for b in blocks:
         b = b.strip()
         if not b:
             continue
-        m = re.match(r"(\d{2}/\d{3})\s*", b)
-        no = m.group(1) if m else "手动"
-        body = b[m.end():] if m else b
-        sd = re.search(r"(\d{2}/\d{2}/\d{4}\s+\d{4})", body)
-        ed = re.findall(r"(\d{2}/\d{2}/\d{4}\s+\d{4})", body)
-        out.append({"no": no, "text": body.strip(),
-                    "start": sd.group(1) if sd else "",
-                    "end": ed[1] if len(ed) > 1 else (ed[0] if ed else "")})
+        m = re.match(r"(?:([A-Z]{4})\s+)?([A-Z]\d{4}/\d{2})\s*", b)
+        if m:
+            body = b[m.end():]
+            no = m.group(2)
+        else:
+            m2 = re.match(r"(\d{2}/\d{3})\s*", b)
+            no = m2.group(1) if m2 else "手动"
+            body = b[m2.end():] if m2 else b
+        # ICAO 式 14 位时间：202608281144 → 28/08/2026 1144
+        sig = re.findall(r"(?<!\d)(20\d{2})(\d{2})(\d{2})(\d{2})(\d{2})(?!\d)", body[:220])
+        if sig:
+            def _f(t):
+                return f"{t[2]}/{t[1]}/{t[0]} {t[3]}{t[4]}"
+            start = _f(sig[0])
+            end = _f(sig[1]) if len(sig) > 1 else ""
+            # 时间已单独取出，从正文里去掉，否则下面的关闭对象正则从行首匹配就会失败
+            body = re.sub(r"(?<!\d)20\d{10}(?!\d)", " ", body)
+            body = re.sub(r"\s+-\s+", " ", body)
+        else:
+            sd = re.search(r"(\d{2}/\d{2}/\d{4}\s+\d{4})", body)
+            ed = re.findall(r"(\d{2}/\d{2}/\d{4}\s+\d{4})", body)
+            start = sd.group(1) if sd else ""
+            end = ed[1] if len(ed) > 1 else (ed[0] if ed else "")
+        out.append({"no": no, "text": body.strip(), "start": start, "end": end})
     return out
+
+# ---------------------------------------------------------------- 解析    return out
 
 # ---------------------------------------------------------------- 解析
 TAIL = re.compile(r"[A-Z]*RSTRCTN>.*$|>.*$|\s*TO\|\s*$")
@@ -142,13 +164,17 @@ def parse_closures(rows, log=print):
         frags = [f.strip() for f in re.split(r",|;", t) if f.strip()]
         for i, f in enumerate(frags):
             has_clsd = bool(re.search(r"CLSD|CLOSED", f, re.I))
-            m = re.match(r"(TWY|RWY)\s+([A-Z0-9/]+)\s*(?:BTN\s+([^,]*?)\s*)?(CLSD|CLOSED)?$",
-                         f.strip(" .|"), re.I)
+            # 清掉 CLSD 后面的原因尾巴（DUE TO / ON FBO APRON），否则"CLSD 必须在行尾"的旧正则会匹配失败
+            f2 = re.sub(r"\s+(DUE TO|BECAUSE OF|BECAUSE|FOR WIP|ON FBO APRON)\b.*$", "", f, flags=re.I)
+            m = re.match(r"(TWY|RWY)\s+([A-Z0-9/]+)\s*(.*)$", f2.strip(" .|,"), re.I)
             if not m:
                 continue
-            kind, name, between = m.group(1).upper(), m.group(2), m.group(3)
-            if not has_clsd and not (between and any(
-                    re.search(r"CLSD|CLOSED", x, re.I) for x in frags[i + 1:])):
+            kind, name, rest = m.group(1).upper(), m.group(2), (m.group(3) or "")
+            between = None
+            mb = re.search(r"BTN\s+(.+)$", rest, re.I)
+            if mb:
+                between = mb.group(1).strip(" .,")
+            if not has_clsd and not any(re.search(r"CLSD|CLOSED", x, re.I) for x in frags[i + 1:]):
                 continue
             rec = dict(no=r["no"], kind=kind, name=name, b1=None, b2=None,
                        b1_type=None, b2_type=None,
