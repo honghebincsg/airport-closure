@@ -189,6 +189,11 @@ def parse_closures(rows, log=print):
                 if p:
                     rec.update(b1_type=p.group(1), b1=p.group(2),
                                b2_type=p.group(3), b2=p.group(4))
+            else:
+                # 半平面边界：TWY V1 CLSD NORTH OF TWY T13 —— 不写两端，只给参照道和方位
+                mh = re.search(r"\b(EAST|WEST|NORTH|SOUTH)\s+OF\s+(?:TWY\s+)?([A-Z0-9/]+)", f2, re.I)
+                if mh:
+                    rec["half"] = (mh.group(1).upper(), mh.group(2).upper())
             objs.append(rec)
     log(f"  解析出关闭对象 {len(objs)} 个")
     return objs
@@ -479,7 +484,12 @@ def solve(objs, nodes, edges, log=print, am=None):
     for c in objs:
         if c["kind"] != "TWY":
             continue
-        tag = f"TWY {c['name']}" + (f"（{c['b1']}–{c['b2']}）" if c.get("b1") else "")
+        if c.get("half"):
+            _d, _r = c["half"]
+            _zh = {"NORTH": "以北", "SOUTH": "以南", "EAST": "以东", "WEST": "以西"}.get(_d, _d)
+            tag = f"TWY {c['name']}（{_r} {_zh}）"
+        else:
+            tag = f"TWY {c['name']}" + (f"（{c['b1']}–{c['b2']}）" if c.get("b1") else "")
         if c["name"] not in {nm for _, _, nm in edges}:
             unmatched.append((tag, c, "滑行网络里无此滑行道"))
             continue
@@ -505,6 +515,52 @@ def solve(objs, nodes, edges, log=print, am=None):
                                          raw=c.get("raw", ""), pts=[xy(*nodes[n]) for n in path]))
                     continue
             unmatched.append((tag, c, "机坪侧无可用端点"))
+            continue
+        if c.get("half"):
+            # 半平面边界（NORTH/EAST/SOUTH/WEST OF TWY R）：不写两端，只给参照道和方位。
+            # 做法：把参照道当一条直线，取它最长两端定方向，逐条判断本道每一小段落在哪一侧，
+            # 只保留指定侧的那些边，再取最长的一段成路径。
+            d_, r_ = c["half"]
+            ref_segs = [(xy(*nodes[a]), xy(*nodes[b])) for a, b, nm in edges if nm == r_]
+            if not ref_segs:
+                unmatched.append((tag, c, f"半平面参照道 {r_} 不在网络"))
+                continue
+            P_ = [p for s in ref_segs for p in s]
+            p0_ = P_[0]
+            p1_ = max(P_, key=lambda q: math.hypot(q[0] - p0_[0], q[1] - p0_[1]))
+            p0_ = max(P_, key=lambda q: math.hypot(q[0] - p1_[0], q[1] - p1_[1]))
+            dx_, dy_ = p1_[0] - p0_[0], p1_[1] - p0_[1]
+            LL_ = math.hypot(dx_, dy_) or 1
+            dx_, dy_ = dx_ / LL_, dy_ / LL_
+            lx_, ly_ = -dy_, dx_                     # 左法向
+            if d_ == "EAST":
+                want = 1 if lx_ > 0 else -1
+            elif d_ == "WEST":
+                want = 1 if lx_ < 0 else -1
+            elif d_ == "NORTH":
+                want = 1 if ly_ > 0 else -1
+            else:
+                want = 1 if ly_ < 0 else -1
+            sub_h = nx.Graph()
+            for a, b, nm in edges:
+                if nm != c["name"]:
+                    continue
+                pa_, pb_ = xy(*nodes[a]), xy(*nodes[b])
+                mx_, my_ = (pa_[0] + pb_[0]) / 2, (pa_[1] + pb_[1]) / 2
+                cr_ = dx_ * (my_ - p0_[1]) - dy_ * (mx_ - p0_[0])
+                if abs(cr_) < 25 or (1 if cr_ > 0 else -1) == want:
+                    sub_h.add_edge(a, b)             # 骑在参照线上的那几米也算进来
+            if sub_h.nodes:
+                comp_ = max(nx.connected_components(sub_h), key=len)
+                tree_ = sub_h.subgraph(comp_)
+                ends_ = [n for n in tree_.nodes if tree_.degree[n] == 1]
+                path_ = (nx.shortest_path(tree_, ends_[0], ends_[-1])
+                         if len(ends_) > 1 else list(tree_.nodes))
+                segments.append(dict(label=tag, no=c["no"], start=c["start"], end=c["end"],
+                                     raw=c.get("raw", ""), pts=[xy(*nodes[n]) for n in path_]))
+                log(f"  半平面落段：{tag}（{d_} OF {r_}）保留 {sub_h.number_of_edges()} 条边")
+                continue
+            unmatched.append((tag, c, f"半平面 {d_} OF {r_} 切不出段"))
             continue
         if c.get("b1") is None:
             comp = max(nx.connected_components(sub), key=len)
@@ -769,8 +825,8 @@ def render(icao, objs, segments, unmatched, runways, nodes, edges, xy, out_png, 
             LEAD[0] += 1
         else:
             LEAD[1] += 1
-        ax.add_patch(Circle(best, 72, facecolor=fc, edgecolor="white", lw=2.0, zorder=9))
-        ax.text(best[0], best[1], str(idx), color="white", fontsize=11, fontweight="bold",
+        ax.add_patch(Circle(best, B_R, facecolor=fc, edgecolor="white", lw=1.6, zorder=9))
+        ax.text(best[0], best[1], str(idx), color="white", fontsize=B_FS, fontweight="bold",
                 ha="center", va="center", zorder=10)
         BADGES.append([int(idx), round(best[0]), round(best[1]), fc])
 
@@ -805,6 +861,16 @@ def render(icao, objs, segments, unmatched, runways, nodes, edges, xy, out_png, 
         fig.canvas.draw()
     except Exception:
         pass
+    # 按"米/像素"决定编号大小和红线粗细：机场越大、图缩得越小，编号和红线就按像素保持恒定，
+    # 否则像 ZGGG 这种 20 km 宽的场，5.4pt 的红线粗到能盖住相邻滑行道、11pt 的数字撑出圆圈。
+    try:
+        _axw = ax.get_window_extent().width or 2720
+        MPX = abs(_W) / _axw
+    except Exception:
+        MPX = 4.5
+    B_R = 13.5 * MPX
+    B_FS = 8.2
+    SEG_LW = 5.4 if MPX < 4.2 else (4.2 if MPX < 5.6 else 3.4)
     for c in [o for o in objs if o["kind"] == "RWY"]:
         for rw in runways:
             if rw["a"][0] in c["name"].split("/") and rw["b"][0] in c["name"].split("/"):
@@ -980,7 +1046,7 @@ def render(icao, objs, segments, unmatched, runways, nodes, edges, xy, out_png, 
             continue
         xs = [p[0] for p in s["pts"]]; ys = [p[1] for p in s["pts"]]
         ax.plot(xs, ys, color="white", lw=9.5, solid_capstyle="round", zorder=7)
-        ax.plot(xs, ys, color="#e63946", lw=5.4, solid_capstyle="round", zorder=8)
+        ax.plot(xs, ys, color="#e63946", lw=SEG_LW, solid_capstyle="round", zorder=8)
         cnt += 1
         numbered.append((cnt, s["label"], s["no"], s["start"], s["end"], s.get("raw", "")))
         ax_, ay_ = xs[len(xs) // 2], ys[len(ys) // 2]
@@ -1046,7 +1112,7 @@ def render(icao, objs, segments, unmatched, runways, nodes, edges, xy, out_png, 
     LBL_DBG = []
     n_lbl = 0
     for nm, (x, y, nv), L, kind in items:
-        rr = 22 + 10 * min(len(nm), 3)
+        rr = 34 + 14 * min(len(nm), 4)
         cand = [(x, y)]
         for d in (72, 132, 200, 270):
             cand.append((x + nv[0] * d, y + nv[1] * d))
