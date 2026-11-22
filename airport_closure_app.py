@@ -726,9 +726,9 @@ def render(icao, objs, segments, unmatched, runways, nodes, edges, xy, out_png, 
             vx, vy = pt[0] - other[0], pt[1] - other[1]
             dd = math.hypot(vx, vy) or 1
             lx, ly = pt[0] - vx / dd * 90, pt[1] - vy / dd * 90
-            ax.text(lx, ly, desig, color="#f7f8fa", fontsize=8,
+            ax.text(lx, ly, desig, color="#f7f8fa", fontsize=6.2,
                     fontweight="bold", ha="center", va="center", zorder=6,
-                    path_effects=[pe.withStroke(linewidth=1.6, foreground="#2b323a")])
+                    path_effects=[pe.withStroke(linewidth=1.4, foreground="#2b323a")])
             reserve(lx, ly, 95)                      # 跑道端号不可压
 
     PXY = [xy(*v) for v in nodes.values()] if nodes else [(0.0, 0.0)]
@@ -870,6 +870,8 @@ def render(icao, objs, segments, unmatched, runways, nodes, edges, xy, out_png, 
         MPX = 4.5
     B_R = 13.5 * MPX
     B_FS = 8.2
+    # 字母标签字号随比例尺走：机场越大（每像素覆盖米数越多）字号越小
+    LBL_FS = 6.6 if MPX < 4.6 else (5.8 if MPX < 6.4 else 4.3)
     SEG_LW = 5.4 if MPX < 4.2 else (4.2 if MPX < 5.6 else 3.4)
     for c in [o for o in objs if o["kind"] == "RWY"]:
         for rw in runways:
@@ -1112,7 +1114,7 @@ def render(icao, objs, segments, unmatched, runways, nodes, edges, xy, out_png, 
     LBL_DBG = []
     n_lbl = 0
     for nm, (x, y, nv), L, kind in items:
-        rr = 34 + 14 * min(len(nm), 4)
+        rr = (34 + 14 * min(len(nm), 4)) * (0.72 if LBL_FS <= 4.5 else 1.0)
         cand = [(x, y)]
         for d in (72, 132, 200, 270):
             cand.append((x + nv[0] * d, y + nv[1] * d))
@@ -1132,15 +1134,15 @@ def render(icao, objs, segments, unmatched, runways, nodes, edges, xy, out_png, 
         LBL_DBG.append([nm, kind, 1, round(spot[0]), round(spot[1])])
         reserve(spot[0], spot[1], rr)
         if kind == "bnd":                      # 边界要素（AM 面片上的分支道）用淡红小斜体
-            ax.text(spot[0], spot[1], nm, fontsize=5.5, color="#b0525b", style="italic",
+            ax.text(spot[0], spot[1], nm, fontsize=LBL_FS*0.86, color="#b0525b", style="italic",
                     ha="center", va="center", zorder=11,
                     path_effects=[pe.withStroke(linewidth=2.2, foreground="#f7f8fa")])
         elif kind == "am":                     # AM 面片落段（淡红编号对应的那道）
-            ax.text(spot[0], spot[1], nm, fontsize=5.8, color="#b0525b",
+            ax.text(spot[0], spot[1], nm, fontsize=LBL_FS*0.9, color="#b0525b",
                     ha="center", va="center", zorder=11,
                     path_effects=[pe.withStroke(linewidth=2.2, foreground="#f7f8fa")])
         else:
-            ax.text(spot[0], spot[1], nm, fontsize=6.5 if len(nm) <= 2 else 5.8, color="#3f4a56",
+            ax.text(spot[0], spot[1], nm, fontsize=LBL_FS if len(nm) <= 2 else LBL_FS*0.9, color="#3f4a56",
                     ha="center", va="center", zorder=11,
                     path_effects=[pe.withStroke(linewidth=2.4, foreground="#f7f8fa")])
         n_lbl += 1
