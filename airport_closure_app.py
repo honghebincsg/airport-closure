@@ -759,6 +759,22 @@ def render(icao, objs, segments, unmatched, runways, nodes, edges, xy, out_png, 
     def rwy_clash(x, y, r):
         return any(math.hypot(x - p[0], y - p[1]) < (r + p[2] + 18) for p in RWY_SOLID)
 
+    # 先把底图范围锁死：否则标签避让时 ax 的比例尺还是默认 (0,1)，量出来的"文字宽多少米"
+    # 完全不准（KMIA 4 号编号落进框里就是这个原因）。锁死后 draw 一次，renderer 也随即可用。
+    try:
+        _bx0, _bx1, _by0, _by1 = BBOX
+    except Exception:
+        _bx0, _bx1 = ax.get_xlim(); _by0, _by1 = ax.get_ylim()
+    _asp = fig.get_size_inches()[0] / fig.get_size_inches()[1]
+    _W = max(_bx1 - _bx0, (_by1 - _by0) * _asp) * 1.10
+    _H = _W / _asp
+    _cx, _cy = (_bx0 + _bx1) / 2, (_by0 + _by1) / 2
+    ax.set_xlim(_cx - _W / 2, _cx + _W / 2)
+    ax.set_ylim(_cy - _H / 2, _cy + _H / 2)
+    try:
+        fig.canvas.draw()
+    except Exception:
+        pass
     for c in [o for o in objs if o["kind"] == "RWY"]:
         for rw in runways:
             if rw["a"][0] in c["name"].split("/") and rw["b"][0] in c["name"].split("/"):
@@ -774,6 +790,23 @@ def render(icao, objs, segments, unmatched, runways, nodes, edges, xy, out_png, 
                 # 编号保持原来的圆圈样式，贴在时间框左侧、与之同一水平线；
                 # 框用左对齐，锚点 spot_t 就是框左边缘，圆放在锚点左侧固定距离。
                 label_y = (span_txt + "\n" if span_txt else "") + f"{c['name']} CLSD"
+                # 按字符数估文字框尺寸（8.2pt 粗体在 170dpi 下 ≈ 8.7 px/字），再用锁定后的比例尺折成米。
+                # 不去量 renderer：量出来的值会随 autoscale 变动，反而不可靠。
+                try:
+                    _x0, _x1 = ax.get_xlim()
+                    # 比例尺要按"绘图区实际像素宽"算：右半张是清单面板，用整张图宽会算小一半
+                    _axw = ax.get_window_extent().width or (fig.get_size_inches()[0] * fig.dpi)
+                    _mpx = abs(_x1 - _x0) / _axw
+                except Exception:
+                    _mpx = 5.9
+                _n = max(len(ln) for ln in label_y.split("\n"))
+                _nl = len(label_y.split("\n"))
+                BOX_W = max(480, (_n * 8.7 + 22) * _mpx)
+                if os.environ.get('CHART_DBG3'):
+                    print(f'   MPP {round(_mpx,2)} n={_n} xlim={[round(v) for v in ax.get_xlim()]}', flush=True)
+                BOX_H = max(170, (_nl * 26 + 18) * _mpx)
+                BX_HW = BOX_W / 2.0
+                BX_RR = BX_HW + 34
                 d0 = rw["width_m"] / 2 + 760
                 # 同一机场的跑道关闭标签统一往"图左"那侧摆：sgn 先从让 x 变小的一侧开始，
                 # 否则同一条跑道的两条时段通告会被左右分置到相邻跑道两侧，容易误读成别的跑道。
@@ -790,21 +823,46 @@ def render(icao, objs, segments, unmatched, runways, nodes, edges, xy, out_png, 
                                    1.1, -0.1, 1.25, -0.25):
                             cx_ = p1[0] + (p2[0] - p1[0]) * t_
                             cy_ = p1[1] + (p2[1] - p1[1]) * t_
-                            cands.append((cx_ + rx_ / RL * d0 * mul * sgn,
-                                          cy_ + ry_ / RL * d0 * mul * sgn))
+                            # 跑道端外（|t|>1）没有横向跑道挡着，偏移取小，贴着跑道头放，
+                            # 这样引线短；只有落在轴线中段才用大偏移躲开相邻跑道。
+                            dd_ = (rw["width_m"] / 2 + 70) if abs(t_) > 1 else d0 * mul
+                            cands.append((cx_ + rx_ / RL * dd_ * sgn,
+                                          cy_ + ry_ / RL * dd_ * sgn))
                 spot_t = None
+                _lx0, _lx1 = ax.get_xlim(); _ly0, _ly1 = ax.get_ylim()
+                _px_, _py_ = (_lx1 - _lx0) * 0.03, (_ly1 - _ly0) * 0.03
+
+                def _inbox(x_, y_):        # 标签/编号必须落在绘图区内，不能顶到标题区
+                    return (_lx0 + _px_ < x_ < _lx1 - _px_) and (_ly0 + _py_ < y_ < _ly1 - _py_)
+
                 for c_ in cands:
-                    ok1 = not clash(c_[0] + 240, c_[1], 245)
-                    ok2 = not seg_clash(c_[0] + 240, c_[1], 195)
-                    ok3 = not clash(c_[0] - 142, c_[1], 122)
-                    ok4 = not rwy_clash(c_[0] + 240, c_[1], 245)
+                    ok1 = not clash(c_[0] + BX_HW, c_[1], BX_RR + 60)
+                    ok2 = not seg_clash(c_[0] + BX_HW, c_[1], 195)
+                    ok3 = not clash(c_[0] - 142, c_[1], 122) and not clash(c_[0] + BX_HW, c_[1], 150)
+                    ok4 = not rwy_clash(c_[0] + BX_HW, c_[1], BX_RR)
                     if os.environ.get("CHART_DBG3"):
                         print(f"   cand {round(c_[0])},{round(c_[1])} box:{ok1} seg:{ok2} badge:{ok3} rwy:{ok4}", flush=True)
-                    if ok1 and ok2 and ok3 and ok4:
+                    ok5 = _inbox(c_[0], c_[1]) and _inbox(c_[0] + BX_HW, c_[1])
+                    if ok1 and ok2 and ok3 and ok4 and ok5:
                         spot_t = c_; break
                 if spot_t is None:
-                    spot_t = cands[0]
-                ax.text(spot_t[0], spot_t[1], label_y, fontsize=8.2, fontweight="bold",
+                    # 全挤死：在跑道周边 1.6 km 范围做网格，取"离跑道最近又不撞任何东西"的位置，
+                    # 不再粗暴地退回第一个候选（那样会直接叠在别的标签上）
+                    mid_ = ((p1[0] + p2[0]) / 2, (p1[1] + p2[1]) / 2)
+                    best_g, best_d = None, 1e18
+                    for gx_ in range(-1600, 1601, 160):
+                        for gy_ in range(-1600, 1601, 160):
+                            g_ = (mid_[0] + gx_, mid_[1] + gy_)
+                            if (_inbox(g_[0], g_[1]) and _inbox(g_[0] + BX_HW, g_[1])
+                                    and not clash(g_[0] + BX_HW, g_[1], BX_RR + 60)
+                                    and not seg_clash(g_[0] + BX_HW, g_[1], 195)
+                                    and not clash(g_[0] - 142, g_[1], 122)
+                                    and not rwy_clash(g_[0] + BX_HW, g_[1], BX_RR)):
+                                d_ = math.hypot(g_[0] + BX_HW - mid_[0], g_[1] - mid_[1])
+                                if d_ < best_d:
+                                    best_d, best_g = d_, g_
+                    spot_t = best_g if best_g else cands[0]
+                _tlabel = ax.text(spot_t[0], spot_t[1], label_y, fontsize=8.2, fontweight="bold",
                         color="#b3202c", ha="left", va="center", multialignment="left",
                         linespacing=1.45, zorder=12,     # 必须压在关闭红线之上，否则红线会穿过文字
                         bbox=dict(boxstyle="round,pad=0.42", fc="#ffffff", ec="#b3202c",
@@ -813,13 +871,34 @@ def render(icao, objs, segments, unmatched, runways, nodes, edges, xy, out_png, 
                 # 先求出跑道中心线上离框最近的点 q，再按 q 在框的左/右决定编号落哪边。
                 vx_, vy_ = p2[0] - p1[0], p2[1] - p1[1]
                 LL_ = math.hypot(vx_, vy_) or 1
-                ref_x = spot_t[0] + 240
+                ref_x = spot_t[0] + BX_HW
                 tt_ = max(0.0, min(1.0, ((ref_x - p1[0]) * vx_ + (spot_t[1] - p1[1]) * vy_) / (LL_ * LL_)))
                 qx_, qy_ = p1[0] + vx_ * tt_, p1[1] + vy_ * tt_
-                if qx_ >= ref_x:                      # 跑道在框右边 → 编号贴在框右侧
-                    bx_, by_ = spot_t[0] + 480 + 150, spot_t[1]
-                else:                                 # 跑道在框左边 → 编号贴在框左侧
-                    bx_, by_ = spot_t[0] - 142, spot_t[1]
+                if qx_ >= ref_x:                      # 跑道在框右边 → 编号贴在框右侧外
+                    # 文字框宽度只能估，估窄了编号就压在"CLSD"上；这里留 35% 余量再放圆
+                    bx_, by_ = spot_t[0] + BOX_W * 1.35 + 26 + 72, spot_t[1]
+                else:                                 # 跑道在框左边 → 编号贴在框左侧外
+                    bx_, by_ = spot_t[0] - 26 - 72, spot_t[1]
+                # 无条件按文字框的真实像素包围盒贴编号：框宽是估的，靠估算摆圆总会压字，
+                # 直接用 renderer 量出来的 bbox 定位，圆就在框外侧固定距离。
+                try:
+                    _bb2 = _tlabel.get_window_extent(renderer=fig.canvas.get_renderer())
+                    _iv2 = ax.transData.inverted()
+                    _p0 = _iv2.transform((_bb2.x0, _bb2.y0))
+                    _p1 = _iv2.transform((_bb2.x1, _bb2.y0))
+                    _lo, _hi = min(_p0[0], _p1[0]), max(_p0[0], _p1[0])
+                    bx_ = (_hi + 90) if qx_ >= ref_x else (_lo - 90)
+                except Exception:
+                    pass
+                # 若这个编号正好落到跑道面上（框贴得很近时会发生），改放框的另一侧，远离跑道
+                try:
+                    if rwy_clash(bx_, by_, 80):
+                        alt_ = (spot_t[0] - 26 - 72) if bx_ > spot_t[0] else \
+                               (spot_t[0] + BOX_W * 1.35 + 26 + 72)
+                        if not rwy_clash(alt_, by_, 80):
+                            bx_ = alt_
+                except Exception:
+                    pass
                 # 编号到跑道之间拉一根引线：起点取跑道中心线上离编号最近的点，
                 # 再沿法向挪到跑道边缘（半宽 + 10 m），末端收到圆边。
                 bx2_, by2_ = bx_, by_                 # 仅用于投影，避免覆盖上面的 q
@@ -837,10 +916,14 @@ def render(icao, objs, segments, unmatched, runways, nodes, edges, xy, out_png, 
                                         edgecolor="#ffffff", lw=0.7, zorder=12.45))
                 ax.add_patch(Circle((bx_, by_), 72, facecolor="#b3202c", edgecolor="white",
                                     lw=2.0, zorder=12))
+                if os.environ.get("CHART_DBG3"):
+                    print(f"   LABEL {cnt} {c['name']} spot={round(spot_t[0])},{round(spot_t[1])} "
+                          f"BOX_W={round(BOX_W)} BOX_H={round(BOX_H)} q=({round(qx_)},{round(qy_)}) "
+                          f"ref_x={round(ref_x)} badge={round(bx_)},{round(by_)}", flush=True)
                 ax.text(bx_, by_, str(cnt), color="white", fontsize=11, fontweight="bold",
                         ha="center", va="center", zorder=13)
                 BADGES.append([int(cnt), round(bx_), round(by_), "#b3202c"])
-                reserve(spot_t[0] + 240, spot_t[1], 245)     # 框整体占位
+                reserve(spot_t[0] + BX_HW, spot_t[1], BX_RR)     # 框整体占位
                 reserve(bx_, by_, 122)                       # 编号圈占位
                 numbered.append((cnt, f"RWY {c['name']}", c["no"], c["start"], c["end"],
                                  c.get("raw", "")))
@@ -967,8 +1050,8 @@ def render(icao, objs, segments, unmatched, runways, nodes, edges, xy, out_png, 
         n_lbl += 1
         _ = n_lbl
 
-    ax.margins(0.05)                          # 留边距，避免边缘的字母/标注被裁掉
-    ax.autoscale_view()
+    # 范围已在画标签前锁定（autoscale_view 会把锁定的 xlim 又冲掉，这里不再调用）
+
     x0, x1 = ax.get_xlim(); y0, y1 = ax.get_ylim()
     span = (x1 - x0) or 1000
     sx, sy, bar = x0 + span * 0.03, y0 + span * 0.03, 1000
@@ -1031,10 +1114,12 @@ def render(icao, objs, segments, unmatched, runways, nodes, edges, xy, out_png, 
                  fontweight="bold", color="#8a6d1f")
         y -= 0.028
         for tag, no, why in unmatched:
+            no_txt = no.get("no", "") if isinstance(no, dict) else (no or "")
             axp.add_patch(Rectangle((0.062, y - 0.007), 0.013, 0.013, transform=axp.transAxes,
                                     facecolor="#e0b23a", edgecolor="none"))
-            axp.text(0.098, y + 0.002, tag, transform=axp.transAxes, fontsize=8.4, color="#6a5a2e")
-            axp.text(0.098, y - 0.018, f"{no} · {why}", transform=axp.transAxes, fontsize=7.0, color="#9a916f")
+            axp.text(0.098, y + 0.002, str(tag)[:34], transform=axp.transAxes, fontsize=8.4, color="#6a5a2e")
+            axp.text(0.098, y - 0.018, f"{str(no_txt)[:20]} · {str(why)[:30]}", transform=axp.transAxes,
+                     fontsize=7.0, color="#9a916f")
             y -= 0.040
 
     fig.text(0.015, 0.012,
@@ -1088,11 +1173,25 @@ def run_task(icao, mode="fetch", text="", proxy=None, at=None, log=print):
         log(f"  ETA {at}Z 前后 6 小时窗口内生效的通告：{len(objs)} 个")
     apt = get_apt(icao, proxy, log)
     nodes, edges = load_network(apt, log)
-    if not nodes or not edges:
-        raise RuntimeError("该机场的 apt.dat 里没有滑行网络，无法定位关闭段")
     runways = load_runways(icao, log)
     am = load_am_taxiways(icao, proxy, log)
-    segments, unmatched, xy, *_ = solve(objs, nodes, edges, log, am=am)
+    if not nodes or not edges:
+        # 有些场景包（如 EHAM）只给了跑道、没有 1201/1202 滑行节点。此时不要整张图失败：
+        # 仍然出跑道底图 + 通告清单，滑行道关闭全部计入"未定位"，标题行会写清楚。
+        log("  该场景包没有滑行网络：本图只出跑道与通告清单，滑行道关闭计入未定位")
+        n_rw = max(len(runways), 1)
+        LAT0 = sum((r["a"][1] + r["b"][1]) / 2 for r in runways) / n_rw
+        LON0 = sum((r["a"][2] + r["b"][2]) / 2 for r in runways) / n_rw
+
+        def xy(lat, lon):
+            return ((lon - LON0) * math.cos(math.radians(LAT0)) * 111320.0,
+                    (lat - LAT0) * 110540.0)
+
+        segments = []
+        unmatched = [(o.get("name", "?"), o, "场景包无滑行网络")
+                     for o in objs if o.get("kind") != "RWY"]
+    else:
+        segments, unmatched, xy, *_ = solve(objs, nodes, edges, log, am=am)
     # 几何基准：两套底图数据各自的版本日期，直接印在图上，避免被误读为当日状态
     gparts = []
     d_apt = apt_meta(icao)
