@@ -260,6 +260,29 @@ def get_apt(icao, proxy=None, log=print):
         if not target:
             raise RuntimeError("场景包里没有 apt.dat")
         data = zf.read(target)
+    def _n_edges(d):
+        return sum(1 for l in d.decode("utf-8", "ignore").splitlines() if l.startswith("1202"))
+    # 有些欧洲场景包只有 1201 节点、没有 1202 边（滑行道连线缺失，画不出红线）。
+    # 这种情况往回找历史版本，取第一个带 1202 的（最多试 6 个，避免下载太多）。
+    if _n_edges(data) == 0:
+        cands = [x.get("sceneryId") for x in (info.get("scenery") or [])]
+        cands = [c for c in reversed(cands) if c and c != sid][:6]
+        for sid2 in cands:
+            try:
+                z2 = s.get(f"https://gateway.x-plane.com/scenery/download/{sid2}", timeout=120)
+                if z2.status_code != 200:
+                    continue
+                with zipfile.ZipFile(io.BytesIO(z2.content)) as zf2:
+                    t2 = next((n for n in zf2.namelist() if n.lower().endswith("apt.dat")), None)
+                    if not t2:
+                        continue
+                    d2 = zf2.read(t2)
+                if _n_edges(d2) > 0:
+                    data, sid = d2, sid2
+                    log(f"  推荐版本无滑行连线，回退到场景包 {sid2}")
+                    break
+            except Exception:
+                continue
     with open(cache_file, "wb") as fh:
         fh.write(data)
     log(f"  场景包 {sid} → apt.dat {len(data) // 1024} KB（已缓存）")
