@@ -155,7 +155,11 @@ def parse_closures(rows, log=print):
                        start=r.get("start", ""), end=r.get("end", ""),
                        inherited=not has_clsd, evidence=f[:110], raw=t)
             if between:
-                p = PAIR.match(between.strip())
+                # 通告里常写成 "BTN TWYS A1 AND P"（复数 TWYS、第二点省略 TWY 前缀），
+                # 原正则只认 "TWY A1 AND TWY P"，会把这种当成"无边界"→整条滑行道标红（MMSM 的 A 就是这样）
+                btxt = between.strip().upper().replace("TWYS", "TWY").replace("RWYS", "RWY")
+                btxt = re.sub(r"\s+AND\s+", " AND ", btxt)
+                p = PAIR.match(btxt)
                 if p:
                     rec.update(b1_type=p.group(1), b1=p.group(2),
                                b2_type=p.group(3), b2=p.group(4))
